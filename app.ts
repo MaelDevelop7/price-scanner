@@ -1,39 +1,69 @@
-// On dit à TypeScript que Quagga existe, pas besoin de types npm
-declare const Quagga: any;
-
-const video = document.getElementById("scanner") as HTMLVideoElement;
 const startButton = document.getElementById("start-scan")!;
+const video = document.getElementById("scanner") as HTMLVideoElement;
 const productInfo = document.getElementById("product-info")!;
 
-startButton.addEventListener("click", () => {
-  Quagga.init({
-    inputStream: {
-      type: "LiveStream",
-      target: video,
-      constraints: {
-        facingMode: "environment"
-      }
-    },
-    decoder: {
-      readers: ["ean_reader"]
-    }
-  }, (err: any) => {
-    if (err) {
-      console.error(err);
-      return;
-    }
-    Quagga.start();
-  });
+declare class BarcodeDetector {
+  constructor(options?: { formats?: string[] });
+  detect(image: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement): Promise<{ rawValue: string }[]>;
+}
 
-  Quagga.onDetected((data: any) => {
-    const code = data.codeResult.code;
-    console.log("Code-barres détecté :", code);
-    fetchProductInfo(code);
-    Quagga.stop();
-  });
-});
+let scanning = false;
 
-// Exemple avec OpenFoodFacts
+// Fonction pour activer la caméra
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" }
+    });
+    video.srcObject = stream;
+    await video.play();
+    scanning = true;
+    scanFrame();
+    console.log("Caméra activée !");
+  } catch (err) {
+    console.error("Impossible d'accéder à la caméra :", err);
+  }
+}
+
+// Fonction pour scanner les codes-barres
+async function scanFrame() {
+  if (!scanning) return;
+
+  // Vérifie que BarcodeDetector est disponible
+  if (!('BarcodeDetector' in window)) {
+    console.error("BarcodeDetector non supporté par ce navigateur !");
+    return;
+  }
+
+  const detector = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_e', 'upc_a'] });
+
+  try {
+    const barcodes = await detector.detect(video);
+    if (barcodes.length > 0) {
+      const code = barcodes[0].rawValue;
+      console.log("Code détecté :", code);
+      scanning = false;
+      stopCamera();
+      fetchProductInfo(code);
+    } else {
+      requestAnimationFrame(scanFrame); // Continuer à scanner
+    }
+  } catch (err) {
+    console.error("Erreur lors du scan :", err);
+    requestAnimationFrame(scanFrame);
+  }
+}
+
+// Fonction pour arrêter la caméra
+function stopCamera() {
+  const stream = video.srcObject as MediaStream;
+  if (stream) {
+    stream.getTracks().forEach(track => track.stop());
+  }
+  video.srcObject = null;
+}
+
+// Fonction pour récupérer les infos produit via OpenFoodFacts
 function fetchProductInfo(barcode: string) {
   fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`)
     .then(res => res.json())
@@ -49,5 +79,14 @@ function fetchProductInfo(barcode: string) {
       } else {
         productInfo.innerHTML = "<p>Produit non trouvé</p>";
       }
+    })
+    .catch(err => {
+      console.error("Erreur API :", err);
+      productInfo.innerHTML = "<p>Erreur lors de la récupération des infos produit</p>";
     });
 }
+
+// Bouton pour démarrer la caméra
+startButton.addEventListener("click", () => {
+  if (!scanning) startCamera();
+});
